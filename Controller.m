@@ -7,6 +7,13 @@
 @implementation Controller
 static const int DIALOG_OK		= 128;
 static const int DIALOG_CANCEL	= 129;
+static NSString *PathToNFC(NSString *path)
+{
+  if (!path) {
+    return nil;
+  }
+  return [path precomposedStringWithCanonicalMapping];
+}
 
 /*
 	NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
@@ -3153,11 +3160,11 @@ static const int DIALOG_CANCEL	= 129;
 #pragma mark Alias
 - (NSString*)pathFromAliasData:(NSData*)data
 {
-	return [self pathFromAlias:[self aliasFromData:data]];
+  return PathToNFC([self pathFromAlias:[self aliasFromData:data]]);
 }
 - (NSData*)aliasDataFromPath:(NSString*)path
 {
-	return [self dataFromAlias:[self aliasFromPath:path]];
+  return [self dataFromAlias:[self aliasFromPath:PathToNFC(path)]];
 }
 - (AliasHandle)aliasFromPath:(NSString *)fullPath
 {
@@ -3166,6 +3173,7 @@ static const int DIALOG_CANCEL	= 129;
     
     CFURLRef	tempURL = NULL;
     Boolean	gotRef = false;
+    fullPath = PathToNFC(fullPath);
     
     tempURL = CFURLCreateWithFileSystemPath(kCFAllocatorDefault, (CFStringRef)fullPath,
                                             kCFURLPOSIXPathStyle, false);
@@ -3301,11 +3309,12 @@ static const int DIALOG_CANCEL	= 129;
 #pragma mark searchFrom
 - (id)searchFromBookSettings:(NSString*)path key:(NSString**)key
 {
+  path = PathToNFC(path);
 	if ([defaults dictionaryForKey:@"BookSettings"]) {
 		NSEnumerator *enu = [[defaults dictionaryForKey:@"BookSettings"] objectEnumerator];
 		id object;
 		while (object = [enu nextObject]) {
-			if ([[object objectForKey:@"temppath"] isEqualToString:path]) {
+        if ([PathToNFC([object objectForKey:@"temppath"]) isEqualToString:path]) {
 				if ([[self pathFromAliasData:[object objectForKey:@"alias"]] isEqualToString:path]) {
 					if (key) {
 						*key = [[[defaults dictionaryForKey:@"BookSettings"] allKeysForObject:object] objectAtIndex:0];
@@ -3339,11 +3348,12 @@ static const int DIALOG_CANCEL	= 129;
 
 - (id)searchFromRecentItems:(NSString*)path index:(int *)index
 {
+  path = PathToNFC(path);
 	if ([defaults arrayForKey:@"RecentItems"]) {
 		NSEnumerator *enu = [[defaults arrayForKey:@"RecentItems"] objectEnumerator];
 		id object;
 		while (object = [enu nextObject]) {
-			if ([[object objectForKey:@"temppath"] isEqualToString:path]) {
+        if ([PathToNFC([object objectForKey:@"temppath"]) isEqualToString:path]) {
 				if ([[self pathFromAliasData:[object objectForKey:@"alias"]] isEqualToString:path]) {
 					if (index) {
 						*index = (int)[[defaults arrayForKey:@"RecentItems"] indexOfObject:object];
@@ -3379,11 +3389,12 @@ static const int DIALOG_CANCEL	= 129;
 
 - (id)searchFromLastPages:(NSString*)path index:(int*)index
 {
+  path = PathToNFC(path);
 	if ([defaults arrayForKey:@"LastPages"]) {
 		NSEnumerator *enu = [[defaults arrayForKey:@"LastPages"] objectEnumerator];
 		id object;
 		while (object = [enu nextObject]) {
-			if ([[object objectForKey:@"temppath"] isEqualToString:path]) {
+        if ([PathToNFC([object objectForKey:@"temppath"]) isEqualToString:path]) {
 				if ([[self pathFromAliasData:[object objectForKey:@"alias"]] isEqualToString:path]) {
 					if (index) {
 						*index = (int)[[defaults arrayForKey:@"LastPages"] indexOfObject:object];
@@ -3486,7 +3497,7 @@ static const int DIALOG_CANCEL	= 129;
 @implementation Controller(private)
 -(void)setCurrentBookPath:(NSString *)new
 {	
-	currentBookPath = [new retain];
+  currentBookPath = [PathToNFC(new) retain];
 	currentBookName = [[currentBookPath lastPathComponent] retain];
 	currentBookAlias = [[self aliasDataFromPath:currentBookPath] retain];
 }
