@@ -134,7 +134,7 @@
                             </menuItem>
                             <menuItem title="Close" keyEquivalent="w" id="73">
                                 <connections>
-                                    <action selector="performClose:" target="-1" id="225"/>
+                                    <action selector="terminate:" target="-2" id="225"/>
                                 </connections>
                             </menuItem>
                         </items>

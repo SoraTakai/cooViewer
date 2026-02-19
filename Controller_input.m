@@ -753,7 +753,7 @@ static BOOL appleRemoteHoldDown = NO;
 					[lock lock];
 					[lock unlock];
 					threadStop = NO;
-					[window performClose:self];
+					[NSApp terminate:self];
 					break;
 				case 47:
 					//randam
@@ -1739,7 +1739,7 @@ static BOOL appleRemoteHoldDown = NO;
 					[lock lock];
 					[lock unlock];
 					threadStop = NO;
-					[window performClose:self];
+					[NSApp terminate:self];
 					break;	
 				case 58:
 					//random
