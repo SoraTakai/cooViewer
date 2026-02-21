@@ -7,6 +7,8 @@
 @implementation Controller
 static const int DIALOG_OK		= 128;
 static const int DIALOG_CANCEL	= 129;
+NSString *const COAutoAcceptMissingSettingKey = @"AutoAcceptMissingSetting";
+static NSString *const COAutoAcceptMissingSettingMigratedKey = @"AutoAcceptMissingSettingMigrated";
 static NSString *PathToNFC(NSString *path)
 {
   if (!path) {
@@ -82,8 +84,13 @@ static NSString *PathToNFC(NSString *path)
 	[appDefault setObject:[NSNumber numberWithInt:10] forKey:@"OpenRecentLimit"];
 	
 	[appDefault setObject:[NSNumber numberWithInt:NO] forKey:@"IgnoreImageDpi"];
+  [appDefault setObject:[NSNumber numberWithBool:YES] forKey:COAutoAcceptMissingSettingKey];
 
 	[defaults registerDefaults:appDefault];
+  if (![defaults objectForKey:COAutoAcceptMissingSettingMigratedKey]) {
+    [defaults setBool:YES forKey:COAutoAcceptMissingSettingKey];
+    [defaults setBool:YES forKey:COAutoAcceptMissingSettingMigratedKey];
+  }
 	
 	fitScreenMode = 0;
 	rotateMode=0;
@@ -3307,6 +3314,56 @@ static NSString *PathToNFC(NSString *path)
 
 
 #pragma mark searchFrom
+- (id)searchFromHistoryByBasename:(NSString*)historyKey path:(NSString*)path index:(int*)index
+{
+  if (!path || ![defaults boolForKey:COAutoAcceptMissingSettingKey]) {
+    if (index) *index = -1;
+    return nil;
+  }
+  NSArray *history = [defaults arrayForKey:historyKey];
+  if (!history) {
+    if (index) *index = -1;
+    return nil;
+  }
+
+  NSString *baseName = [path lastPathComponent];
+  int matchIndex = -1;
+  id matchObject = nil;
+  NSEnumerator *enu = [history objectEnumerator];
+  id object;
+  while (object = [enu nextObject]) {
+    NSString *tempPath = PathToNFC([object objectForKey:@"temppath"]);
+    if (!tempPath) {
+      continue;
+    }
+    if (![[tempPath lastPathComponent] isEqualToString:baseName]) {
+      continue;
+    }
+    if ([[NSFileManager defaultManager] fileExistsAtPath:tempPath]) {
+      continue;
+    }
+    matchIndex = (int)[history indexOfObject:object];
+    matchObject = object;
+    break;
+  }
+  if (!matchObject || matchIndex < 0) {
+    if (index) *index = -1;
+    return nil;
+  }
+
+  NSMutableArray *newArray = [NSMutableArray arrayWithArray:history];
+  NSMutableDictionary *newInnerDic = [NSMutableDictionary dictionaryWithDictionary:matchObject];
+  [newInnerDic setObject:path forKey:@"temppath"];
+  [newInnerDic setObject:[self aliasDataFromPath:path] forKey:@"alias"];
+  [newArray removeObjectAtIndex:matchIndex];
+  [newArray insertObject:newInnerDic atIndex:matchIndex];
+  [defaults setObject:newArray forKey:historyKey];
+  if (index) {
+    *index = matchIndex;
+  }
+  return [NSDictionary dictionaryWithDictionary:newInnerDic];
+}
+
 - (id)searchFromBookSettings:(NSString*)path key:(NSString**)key
 {
   path = PathToNFC(path);
@@ -3383,6 +3440,10 @@ static NSString *PathToNFC(NSString *path)
 		}
 		
 	}
+  id guessed = [self searchFromHistoryByBasename:@"RecentItems" path:path index:index];
+  if (guessed) {
+    return guessed;
+  }
 	if (index) *index = -1;
 	return nil;
 }
@@ -3423,6 +3484,10 @@ static NSString *PathToNFC(NSString *path)
 		}
 		
 	}
+  id guessed = [self searchFromHistoryByBasename:@"LastPages" path:path index:index];
+  if (guessed) {
+    return guessed;
+  }
 	if (index) *index = -1;
 	return nil;
 }
@@ -3443,14 +3508,18 @@ static NSString *PathToNFC(NSString *path)
 			temp = [self pathFromAliasData:[[newDic objectForKey:tempKey] objectForKey:@"alias"]];
 			if ([[temp lastPathComponent] isEqualToString:[path lastPathComponent]] && ![[NSFileManager defaultManager] fileExistsAtPath:temp]) {
 				
-				int result = (int)NSRunAlertPanel(NSLocalizedString(@"Setting is not found",@""),
-											 NSLocalizedString(@"Setting of %@ is not found.\nDo you want to use a setting of %@ ?",@""),
-											 NSLocalizedString(@"OK",@""), 
-											 NSLocalizedString(@"Cancel",@""), 
-											 nil,
+        BOOL shouldUseSetting = [defaults boolForKey:COAutoAcceptMissingSettingKey];
+        if (!shouldUseSetting) {
+          int result = (int)NSRunAlertPanel(NSLocalizedString(@"Setting is not found",@""),
+                                             NSLocalizedString(@"Setting of %@ is not found.\nDo you want to use a setting of %@ ?",@""),
+                                             NSLocalizedString(@"OK",@""), 
+                                             NSLocalizedString(@"Cancel",@""), 
+                                             nil,
                                              path,temp);
+          shouldUseSetting = (result == NSAlertDefaultReturn || result == NSAlertFirstButtonReturn);
+        }
 				
-				if(result == NSAlertDefaultReturn || result == NSAlertFirstButtonReturn) {
+        if(shouldUseSetting) {
 					/*LastPagesの修正*/
 					int lastPagesIndex;
 					id lastPage = [self searchFromLastPages:temp index:&lastPagesIndex];

@@ -1034,6 +1034,12 @@ static const int DIALOG_CANCEL	= 129;
 	} else {
 		[showThumbnailCheck setState:NSOffState];
 	}
+  id autoAcceptMissingSetting = [defaults objectForKey:COAutoAcceptMissingSettingKey];
+  if (!autoAcceptMissingSetting || [autoAcceptMissingSetting boolValue]) {
+    [autoAcceptMissingSettingCheck setState:NSOnState];
+  } else {
+    [autoAcceptMissingSettingCheck setState:NSOffState];
+  }
 	if ([defaults boolForKey:@"IgnoreImageDpi"]) {
 		[ignoreDpiCheck setState:NSControlStateValueOn];
 	} else {
@@ -1559,6 +1565,11 @@ static const int DIALOG_CANCEL	= 129;
 		} else {
 			[defaults setBool:NO forKey:@"ShowThumbnailWhenOpen"];
 		}
+    if ([autoAcceptMissingSettingCheck state]==NSOnState) {
+      [defaults setBool:YES forKey:COAutoAcceptMissingSettingKey];
+    } else {
+      [defaults setBool:NO forKey:COAutoAcceptMissingSettingKey];
+    }
 		if ([ignoreDpiCheck state]==NSControlStateValueOn) {
 			[defaults setBool:YES forKey:@"IgnoreImageDpi"];
 		} else {

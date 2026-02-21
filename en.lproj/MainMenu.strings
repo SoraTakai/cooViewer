@@ -1271,6 +1271,9 @@
 /* Class = "NSButtonCell"; title = "Show thumbnail view on open"; ObjectID = "4317"; */
 "4317.title" = "Show thumbnail view on open";
 
+/* Class = "NSButtonCell"; title = "Auto-apply the same setting for moved files"; ObjectID = "Nhz-fj-sPY"; */
+"Nhz-fj-sPY.title" = "Auto-apply the same setting for moved files";
+
 /* Class = "NSButtonCell"; title = "OK"; ObjectID = "4318"; */
 "4318.title" = "OK";
 

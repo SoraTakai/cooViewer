@@ -16,6 +16,8 @@
 @class RemoteControl;
 @class MultiClickRemoteBehavior;
 
+extern NSString *const COAutoAcceptMissingSettingKey;
+
 @interface Controller : NSObject
 {
 	RemoteControl *remoteControl;

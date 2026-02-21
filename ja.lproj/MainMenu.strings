@@ -1225,6 +1225,9 @@
 /* Class = "NSButtonCell"; title = "Show thumbnail view on open"; ObjectID = "4317"; */
 "4317.title" = "開いたときに一覧を表示する";
 
+/* Class = "NSButtonCell"; title = "Auto-apply the same setting for moved files"; ObjectID = "Nhz-fj-sPY"; */
+"Nhz-fj-sPY.title" = "移動されたファイルに同じ設定を自動で適用する";
+
 /* Class = "NSButtonCell"; title = "OK"; ObjectID = "4318"; */
 "4318.title" = "OK";
 
