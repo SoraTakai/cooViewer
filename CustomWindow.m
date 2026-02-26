@@ -32,6 +32,12 @@
         [view setAccessoryWindowFrame];
 	}	
 }
+
+- (NSString *)accessibilitySubrole
+{
+  return NSAccessibilityStandardWindowSubrole;
+}
+
 - (void)setFullScreen:(BOOL)b
 {	
 	fullscreen = b;
