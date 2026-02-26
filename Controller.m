@@ -712,6 +712,7 @@ static NSString *PathToNFC(NSString *path)
 #pragma mark openning
 - (void)openPage:(int)page last:(BOOL)last;
 {	
+  [NSApp activateIgnoringOtherApps:YES];
 	[window makeKeyAndOrderFront:self];
 	
 	[progressIndicator startAnimation:self];
