@@ -1,4 +1,4 @@
-# cooViewer (SoraTakai fork)
+# cooViewer (Sora fork)
 
 This repository is a maintenance fork of cooViewer.
 
