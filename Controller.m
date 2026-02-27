@@ -3,18 +3,269 @@
 #import "BookmarkController.h"
 #import "CustomImageView.h"
 #import "FullImagePanel.h"
+#import <CommonCrypto/CommonDigest.h>
 
 @implementation Controller
 static const int DIALOG_OK		= 128;
 static const int DIALOG_CANCEL	= 129;
+
+static const NSUInteger COHistorySignatureSampleBytes = 1024 * 1024;  // 1 MiB
+
 NSString *const COAutoAcceptMissingSettingKey = @"AutoAcceptMissingSetting";
 static NSString *const COAutoAcceptMissingSettingMigratedKey = @"AutoAcceptMissingSettingMigrated";
+static NSString *const COHistorySignatureKey = @"historySignature";
 static NSString *PathToNFC(NSString *path)
 {
   if (!path) {
     return nil;
   }
   return [path precomposedStringWithCanonicalMapping];
+}
+static NSString *COHexStringFromBytes(const unsigned char *bytes, NSUInteger length)
+{
+  if (!bytes || length == 0) {
+    return nil;
+  }
+  NSMutableString *result = [NSMutableString stringWithCapacity:length * 2];
+  NSUInteger i;
+  for (i = 0; i < length; i++) {
+    [result appendFormat:@"%02x", bytes[i]];
+  }
+  return result;
+}
+static NSString *COHistorySignatureForPath(NSString *path, NSUInteger sampleBytes)
+{
+  if (!path || sampleBytes == 0) {
+    return nil;
+  }
+  BOOL isDir = NO;
+  if (![[NSFileManager defaultManager] fileExistsAtPath:path isDirectory:&isDir] || isDir) {
+    return nil;
+  }
+  NSDictionary *attrs = [[NSFileManager defaultManager] attributesOfItemAtPath:path error:nil];
+  unsigned long long fileSize = [[attrs objectForKey:NSFileSize] unsignedLongLongValue];
+  NSFileHandle *fileHandle = [NSFileHandle fileHandleForReadingAtPath:path];
+  if (!fileHandle) {
+    return nil;
+  }
+
+  unsigned long long fullReadLimit = ((unsigned long long)sampleBytes) * 2ULL;
+  NSMutableData *hashData = [NSMutableData data];
+  if (fileSize <= fullReadLimit) {
+    NSData *allData = [fileHandle readDataToEndOfFile];
+    if (!allData) {
+      [fileHandle closeFile];
+      return nil;
+    }
+    [hashData appendData:allData];
+  } else {
+    NSData *firstData = [fileHandle readDataOfLength:sampleBytes];
+    if (!firstData || [firstData length] == 0) {
+      [fileHandle closeFile];
+      return nil;
+    }
+    [hashData appendData:firstData];
+    [fileHandle seekToFileOffset:fileSize - sampleBytes];
+    NSData *lastData = [fileHandle readDataOfLength:sampleBytes];
+    if (!lastData || [lastData length] == 0) {
+      [fileHandle closeFile];
+      return nil;
+    }
+    [hashData appendData:lastData];
+  }
+  [fileHandle closeFile];
+
+  unsigned char digest[CC_SHA256_DIGEST_LENGTH];
+  CC_SHA256((const unsigned char *)[hashData bytes], (CC_LONG)[hashData length], digest);
+  NSString *digestHex = COHexStringFromBytes(digest, CC_SHA256_DIGEST_LENGTH);
+  if (!digestHex) {
+    return nil;
+  }
+  return [NSString stringWithFormat:@"v1:%lu:%llu:%@", (unsigned long)sampleBytes, fileSize, digestHex];
+}
+static NSDictionary *COBuildHistorySignatureIndexForArray(NSArray *history)
+{
+  if (!history) {
+    return nil;
+  }
+  NSMutableDictionary *index = [NSMutableDictionary dictionary];
+  NSUInteger i;
+  for (i = 0; i < [history count]; i++) {
+    NSDictionary *object = [history objectAtIndex:i];
+    NSString *signature = [object objectForKey:COHistorySignatureKey];
+    if (!signature) {
+      continue;
+    }
+    NSMutableArray *bucket = [index objectForKey:signature];
+    if (!bucket) {
+      bucket = [NSMutableArray array];
+      [index setObject:bucket forKey:signature];
+    }
+    [bucket addObject:[NSNumber numberWithUnsignedInteger:i]];
+  }
+  return index;
+}
+static NSDictionary *COHistorySignatureIndexForArray(NSString *historyKey, NSArray *history)
+{
+  if (!historyKey || !history) {
+    return nil;
+  }
+  static NSMutableDictionary *cache = nil;
+  if (!cache) {
+    cache = [[NSMutableDictionary alloc] init];
+  }
+  NSDictionary *entry = [cache objectForKey:historyKey];
+  NSArray *cachedSource = [entry objectForKey:@"source"];
+  NSDictionary *cachedIndex = [entry objectForKey:@"index"];
+  if (cachedSource != history || !cachedIndex) {
+    NSDictionary *newIndex = COBuildHistorySignatureIndexForArray(history);
+    if (!newIndex) {
+      [cache removeObjectForKey:historyKey];
+      return nil;
+    }
+    NSDictionary *newEntry = [NSDictionary dictionaryWithObjectsAndKeys:
+                              history, @"source",
+                              newIndex, @"index",
+                              nil];
+    [cache setObject:newEntry forKey:historyKey];
+    return newIndex;
+  }
+  return cachedIndex;
+}
+static NSDictionary *COBuildHistorySignatureIndexForDictionary(NSDictionary *settings)
+{
+  if (!settings) {
+    return nil;
+  }
+  NSMutableDictionary *index = [NSMutableDictionary dictionary];
+  NSEnumerator *enu = [settings keyEnumerator];
+  id tempKey;
+  while (tempKey = [enu nextObject]) {
+    NSDictionary *object = [settings objectForKey:tempKey];
+    NSString *signature = [object objectForKey:COHistorySignatureKey];
+    if (!signature) {
+      continue;
+    }
+    NSMutableArray *bucket = [index objectForKey:signature];
+    if (!bucket) {
+      bucket = [NSMutableArray array];
+      [index setObject:bucket forKey:signature];
+    }
+    [bucket addObject:tempKey];
+  }
+  return index;
+}
+static NSDictionary *COHistorySignatureIndexForDictionary(NSString *historyKey, NSDictionary *settings)
+{
+  if (!historyKey || !settings) {
+    return nil;
+  }
+  static NSMutableDictionary *cache = nil;
+  if (!cache) {
+    cache = [[NSMutableDictionary alloc] init];
+  }
+  NSDictionary *entry = [cache objectForKey:historyKey];
+  NSDictionary *cachedSource = [entry objectForKey:@"source"];
+  NSDictionary *cachedIndex = [entry objectForKey:@"index"];
+  if (cachedSource != settings || !cachedIndex) {
+    NSDictionary *newIndex = COBuildHistorySignatureIndexForDictionary(settings);
+    if (!newIndex) {
+      [cache removeObjectForKey:historyKey];
+      return nil;
+    }
+    NSDictionary *newEntry = [NSDictionary dictionaryWithObjectsAndKeys:
+                              settings, @"source",
+                              newIndex, @"index",
+                              nil];
+    [cache setObject:newEntry forKey:historyKey];
+    return newIndex;
+  }
+  return cachedIndex;
+}
+static void CORemoveHistoryEntriesByIdentity(NSMutableArray *history, NSString *path, NSString *signature)
+{
+  if (!history || (!path && !signature)) {
+    return;
+  }
+  NSInteger i;
+  for (i = (NSInteger)[history count] - 1; i >= 0; i--) {
+    NSDictionary *entry = [history objectAtIndex:(NSUInteger)i];
+    BOOL shouldRemove = NO;
+    if (path) {
+      NSString *tempPath = PathToNFC([entry objectForKey:@"temppath"]);
+      if (tempPath && [tempPath isEqualToString:path]) {
+        shouldRemove = YES;
+      }
+    }
+    if (!shouldRemove && signature) {
+      NSString *entrySignature = [entry objectForKey:COHistorySignatureKey];
+      if (entrySignature && [entrySignature isEqualToString:signature]) {
+        shouldRemove = YES;
+      }
+    }
+    if (shouldRemove) {
+      [history removeObjectAtIndex:(NSUInteger)i];
+    }
+  }
+}
+static void CORemoveBookSettingsEntriesByIdentity(NSMutableDictionary *settings, NSString *path, NSString *signature, NSString *exceptKey)
+{
+  if (!settings || (!path && !signature)) {
+    return;
+  }
+  NSMutableArray *removeKeys = [NSMutableArray array];
+  NSEnumerator *enu = [settings keyEnumerator];
+  id tempKey;
+  while (tempKey = [enu nextObject]) {
+    if (exceptKey && [tempKey isEqualToString:exceptKey]) {
+      continue;
+    }
+    NSDictionary *entry = [settings objectForKey:tempKey];
+    BOOL shouldRemove = NO;
+    if (path) {
+      NSString *tempPath = PathToNFC([entry objectForKey:@"temppath"]);
+      if (tempPath && [tempPath isEqualToString:path]) {
+        shouldRemove = YES;
+      }
+    }
+    if (!shouldRemove && signature) {
+      NSString *entrySignature = [entry objectForKey:COHistorySignatureKey];
+      if (entrySignature && [entrySignature isEqualToString:signature]) {
+        shouldRemove = YES;
+      }
+    }
+    if (shouldRemove) {
+      [removeKeys addObject:tempKey];
+    }
+  }
+  if ([removeKeys count] > 0) {
+    [settings removeObjectsForKeys:removeKeys];
+  }
+}
+static void COSetHistoryIdentity(NSMutableDictionary *entry, NSString *path, NSData *aliasData)
+{
+  if (!entry || !path) {
+    return;
+  }
+  [entry setObject:path forKey:@"temppath"];
+  if (aliasData) {
+    [entry setObject:aliasData forKey:@"alias"];
+  }
+  NSString *signature = COHistorySignatureForPath(path, COHistorySignatureSampleBytes);
+  if (signature) {
+    [entry setObject:signature forKey:COHistorySignatureKey];
+  } else {
+    [entry removeObjectForKey:COHistorySignatureKey];
+  }
+}
+static NSDictionary *COBuildHistoryEntry(NSString *path, NSData *aliasData, NSNumber *page)
+{
+  NSMutableDictionary *entry = [NSMutableDictionary dictionary];
+  COSetHistoryIdentity(entry, path, aliasData);
+  if (page) {
+    [entry setObject:page forKey:@"page"];
+  }
+  return [NSDictionary dictionaryWithDictionary:entry];
 }
 
 /*
@@ -796,11 +1047,12 @@ static NSString *PathToNFC(NSString *path)
 			} else {
 				dic = [NSMutableDictionary dictionaryWithDictionary:[defaults dictionaryForKey:@"BookSettings"]];
 			}
-			id key;
-			[self searchFromBookSettings:oldBookPath key:&key];
-			
-			[currentBookSetting setObject:aliasData forKey:@"alias"];
-			[currentBookSetting setObject:oldBookPath forKey:@"temppath"];
+				id key;
+				[self searchFromBookSettings:oldBookPath key:&key];
+				
+        COSetHistoryIdentity(currentBookSetting, oldBookPath, aliasData);
+        NSString *historySignature = [currentBookSetting objectForKey:COHistorySignatureKey];
+        CORemoveBookSettingsEntriesByIdentity(dic, oldBookPath, historySignature, key);
 			if ([bookmarkArray count]>0) {
 				[currentBookSetting setObject:bookmarkArray forKey:@"bookmarks"];
 			} else if ([bookmarkArray count]==0) {
@@ -828,23 +1080,19 @@ static NSString *PathToNFC(NSString *path)
 			} else {
 				nowPage--;
 			}
-			NSNumber *pageNumber = [NSNumber numberWithInt:nowPage];
-			if (openRecentLimit>0) {
-				NSMutableArray *newRecentItems;
+				NSNumber *pageNumber = [NSNumber numberWithInt:nowPage];
+				if (openRecentLimit>0) {
+					NSMutableArray *newRecentItems;
 				if (![defaults arrayForKey:@"RecentItems"]) {
 					newRecentItems = [NSMutableArray array];
-				} else {
-					newRecentItems = [NSMutableArray arrayWithArray:[defaults arrayForKey:@"RecentItems"]];
-				}
-				int index = 0;
-				id object = [self searchFromRecentItems:oldBookPath index:&index];
-				if (object) {
-					[newRecentItems removeObjectAtIndex:index];
-				}
-				while ([newRecentItems count] >= openRecentLimit) {
-					[newRecentItems removeLastObject];
-				}
-				[newRecentItems insertObject:[NSDictionary dictionaryWithObjectsAndKeys:aliasData,@"alias",pageNumber,@"page",oldBookPath,@"temppath",nil] atIndex:0];
+					} else {
+						newRecentItems = [NSMutableArray arrayWithArray:[defaults arrayForKey:@"RecentItems"]];
+					}
+          CORemoveHistoryEntriesByIdentity(newRecentItems, oldBookPath, historySignature);
+					while ([newRecentItems count] >= openRecentLimit) {
+						[newRecentItems removeLastObject];
+					}
+        [newRecentItems insertObject:COBuildHistoryEntry(oldBookPath, aliasData, pageNumber) atIndex:0];
 				[defaults setObject:newRecentItems forKey:@"RecentItems"];
 			} else {
 				[defaults removeObjectForKey:@"RecentItems"];
@@ -853,31 +1101,23 @@ static NSString *PathToNFC(NSString *path)
 				NSMutableArray *lastPages;
 				if (![defaults arrayForKey:@"LastPages"]) {
 					lastPages = [NSMutableArray array];
-				} else {
-					lastPages = [NSMutableArray arrayWithArray:[defaults arrayForKey:@"LastPages"]];
-				}
-				int index;
-				id object = [self searchFromLastPages:oldBookPath index:&index];
-				if (object) {
-					[lastPages removeObjectAtIndex:index];
-				}
-				[lastPages addObject:[NSDictionary dictionaryWithObjectsAndKeys:aliasData,@"alias",pageNumber,@"page",oldBookPath,@"temppath",nil]];
-				[defaults setObject:lastPages forKey:@"LastPages"];
-			} else if (!alwaysRememberLastPage || nowPage == 0) {
+					} else {
+						lastPages = [NSMutableArray arrayWithArray:[defaults arrayForKey:@"LastPages"]];
+					}
+          CORemoveHistoryEntriesByIdentity(lastPages, oldBookPath, historySignature);
+        [lastPages addObject:COBuildHistoryEntry(oldBookPath, aliasData, pageNumber)];
+					[defaults setObject:lastPages forKey:@"LastPages"];
+				} else if (!alwaysRememberLastPage || nowPage == 0) {
 				NSMutableArray *lastPages;
 				if (![defaults arrayForKey:@"LastPages"]) {
 					lastPages = [NSMutableArray array];
-				} else {
-					lastPages = [NSMutableArray arrayWithArray:[defaults arrayForKey:@"LastPages"]];
+					} else {
+						lastPages = [NSMutableArray arrayWithArray:[defaults arrayForKey:@"LastPages"]];
+					}
+          CORemoveHistoryEntriesByIdentity(lastPages, oldBookPath, historySignature);
+					[defaults setObject:lastPages forKey:@"LastPages"];
 				}
-				int index;
-				id object = [self searchFromLastPages:oldBookPath index:&index];
-				if (object) {
-					[lastPages removeObjectAtIndex:index];
-				}
-				[defaults setObject:lastPages forKey:@"LastPages"];
 			}
-		}
 		
 		[completeMutableArray release];
 		completeMutableArray = nil;
@@ -943,7 +1183,7 @@ static NSString *PathToNFC(NSString *path)
 	}
 	/*add RecentItem*/
 	if (openRecentLimit>0) {
-		NSDictionary *newDic = [NSDictionary dictionaryWithObjectsAndKeys:aliasData,@"alias",currentBookPath,@"temppath",nil];
+    NSDictionary *newDic = COBuildHistoryEntry(currentBookPath, aliasData, nil);
 		if (alwaysRememberLastPage) {
 			id object = [self searchFromLastPages:currentBookPath index:nil];
 			if (object) {
@@ -956,6 +1196,9 @@ static NSString *PathToNFC(NSString *path)
 			[newRecentItems removeObjectAtIndex:index];
 			newDic = objectS;
 		}
+    NSMutableDictionary *newInnerDic = [NSMutableDictionary dictionaryWithDictionary:newDic];
+    COSetHistoryIdentity(newInnerDic, currentBookPath, aliasData);
+    newDic = [NSDictionary dictionaryWithDictionary:newInnerDic];
 		[newRecentItems insertObject:newDic atIndex:0];
 		
 		[defaults setObject:newRecentItems forKey:@"RecentItems"];
@@ -2639,8 +2882,7 @@ static NSString *PathToNFC(NSString *path)
 - (IBAction)deleteSettings:(id)sender
 {	
 	NSData *alias = currentBookAlias;
-	[currentBookSetting setObject:alias forKey:@"alias"];
-	[currentBookSetting setObject:currentBookPath forKey:@"temppath"];
+  COSetHistoryIdentity(currentBookSetting, currentBookPath, alias);
 	[currentBookSetting removeObjectForKey:@"readMode"];
 	[currentBookSetting removeObjectForKey:@"sortMode"];
 	[currentBookSetting removeObjectForKey:@"marks"];
@@ -2884,18 +3126,19 @@ static NSString *PathToNFC(NSString *path)
 			} else {
 				dic = [NSMutableDictionary dictionaryWithDictionary:[defaults dictionaryForKey:@"BookSettings"]];
 			}
-			id key;
-			[self searchFromBookSettings:currentBookPath key:&key];
-			
-			if (!rememberBookSettings) {
-				[currentBookSetting removeAllObjects];
-			}
-			
-			[currentBookSetting setObject:aliasData forKey:@"alias"];
-			[currentBookSetting setObject:currentBookPath forKey:@"temppath"];
-			if ([bookmarkArray count]>0) {
-				[currentBookSetting setObject:bookmarkArray forKey:@"bookmarks"];
-			} else if ([bookmarkArray count]==0) {
+				id key;
+				[self searchFromBookSettings:currentBookPath key:&key];
+				
+				if (!rememberBookSettings) {
+					[currentBookSetting removeAllObjects];
+				}
+				
+        COSetHistoryIdentity(currentBookSetting, currentBookPath, aliasData);
+        NSString *historySignature = [currentBookSetting objectForKey:COHistorySignatureKey];
+        CORemoveBookSettingsEntriesByIdentity(dic, currentBookPath, historySignature, key);
+				if ([bookmarkArray count]>0) {
+					[currentBookSetting setObject:bookmarkArray forKey:@"bookmarks"];
+				} else if ([bookmarkArray count]==0) {
 				[currentBookSetting removeObjectForKey:@"bookmarks"];
 			}
 			if ([currentBookSetting count]>2) {
@@ -2920,60 +3163,42 @@ static NSString *PathToNFC(NSString *path)
 				nowPage--;
 			}
 			NSNumber *pageNumber = [NSNumber numberWithInt:nowPage];
-			if (openRecentLimit>0) {			
-				NSMutableArray *array;
+				if (openRecentLimit>0) {			
+					NSMutableArray *array;
 				if (![defaults arrayForKey:@"RecentItems"]) {
 					array = [NSMutableArray array];
-				} else {
-					array = [NSMutableArray arrayWithArray:[defaults arrayForKey:@"RecentItems"]];
-				}
-				NSEnumerator *enu = [array objectEnumerator];
-				id object;
-				while (object = [enu nextObject]) {
-					if ([[self pathFromAliasData:[object objectForKey:@"alias"]] isEqualToString:currentBookPath]) {
-						[array removeObject:object];
-						break;
+					} else {
+						array = [NSMutableArray arrayWithArray:[defaults arrayForKey:@"RecentItems"]];
 					}
-				}
-				while ([array count] >= openRecentLimit) {
-					[array removeLastObject];
-				}
-				[array insertObject:[NSDictionary dictionaryWithObjectsAndKeys:aliasData,@"alias",pageNumber,@"page",currentBookPath,@"temppath",nil] atIndex:0];
+          CORemoveHistoryEntriesByIdentity(array, currentBookPath, historySignature);
+					while ([array count] >= openRecentLimit) {
+						[array removeLastObject];
+					}
+        [array insertObject:COBuildHistoryEntry(currentBookPath, aliasData, pageNumber) atIndex:0];
 				[defaults setObject:array forKey:@"RecentItems"];
 			} else {
 				[defaults removeObjectForKey:@"RecentItems"];
 			}
-			if (alwaysRememberLastPage && nowPage > 0) {
-				NSMutableArray *array;
+				if (alwaysRememberLastPage && nowPage > 0) {
+					NSMutableArray *array;
 				if (![defaults arrayForKey:@"LastPages"]) {
 					array = [NSMutableArray array];
-				} else {
-					array = [NSMutableArray arrayWithArray:[defaults arrayForKey:@"LastPages"]];
-				}
-				NSEnumerator *enu = [array objectEnumerator];
-				id object;
-				while (object = [enu nextObject]) {
-					if ([[self pathFromAliasData:[object objectForKey:@"alias"]] isEqualToString:currentBookPath]) {
-						[array removeObject:object];
-						break;
+					} else {
+						array = [NSMutableArray arrayWithArray:[defaults arrayForKey:@"LastPages"]];
 					}
-				}
-				[array addObject:[NSDictionary dictionaryWithObjectsAndKeys:aliasData,@"alias",pageNumber,@"page",currentBookPath,@"temppath",nil]];
-				[defaults setObject:array forKey:@"LastPages"];
-			} else if (!alwaysRememberLastPage || nowPage == 0) {
+          CORemoveHistoryEntriesByIdentity(array, currentBookPath, historySignature);
+        [array addObject:COBuildHistoryEntry(currentBookPath, aliasData, pageNumber)];
+					[defaults setObject:array forKey:@"LastPages"];
+				} else if (!alwaysRememberLastPage || nowPage == 0) {
 				NSMutableArray *lastPages;
 				if (![defaults arrayForKey:@"LastPages"]) {
 					lastPages = [NSMutableArray array];
-				} else {
-					lastPages = [NSMutableArray arrayWithArray:[defaults arrayForKey:@"LastPages"]];
+					} else {
+						lastPages = [NSMutableArray arrayWithArray:[defaults arrayForKey:@"LastPages"]];
+					}
+          CORemoveHistoryEntriesByIdentity(lastPages, currentBookPath, historySignature);
+					[defaults setObject:lastPages forKey:@"LastPages"];
 				}
-				int index;
-				id object = [self searchFromLastPages:currentBookPath index:&index];
-				if (object) {
-					[lastPages removeObjectAtIndex:index];
-				}
-				[defaults setObject:lastPages forKey:@"LastPages"];
-			}
 			[defaults synchronize];
 		}
 		
@@ -3327,37 +3552,53 @@ static NSString *PathToNFC(NSString *path)
     return nil;
   }
 
-  NSString *baseName = [path lastPathComponent];
-  int matchIndex = -1;
-  id matchObject = nil;
-  NSEnumerator *enu = [history objectEnumerator];
-  id object;
-  while (object = [enu nextObject]) {
-    NSString *tempPath = PathToNFC([object objectForKey:@"temppath"]);
-    if (!tempPath) {
-      continue;
-    }
-    if (![[tempPath lastPathComponent] isEqualToString:baseName]) {
-      continue;
-    }
-    if ([[NSFileManager defaultManager] fileExistsAtPath:tempPath]) {
-      continue;
-    }
-    matchIndex = (int)[history indexOfObject:object];
-    matchObject = object;
-    break;
+  NSString *pathSignature = COHistorySignatureForPath(path, COHistorySignatureSampleBytes);
+  if (!pathSignature) {
+    if (index) *index = -1;
+    return nil;
   }
-  if (!matchObject || matchIndex < 0) {
+  NSDictionary *signatureIndex = COHistorySignatureIndexForArray(historyKey, history);
+  NSArray *signatureMatches = [signatureIndex objectForKey:pathSignature];
+  if (!signatureMatches || [signatureMatches count] == 0) {
+    if (index) *index = -1;
+    return nil;
+  }
+
+  BOOL multipleMatches = ([signatureMatches count] > 1);
+  int matchIndex;
+  if (multipleMatches && [historyKey isEqualToString:@"LastPages"]) {
+    matchIndex = [[signatureMatches lastObject] intValue];
+  } else {
+    matchIndex = [[signatureMatches objectAtIndex:0] intValue];
+  }
+  id matchObject = [history objectAtIndex:matchIndex];
+  NSString *tempPath = PathToNFC([matchObject objectForKey:@"temppath"]);
+  if (!tempPath) {
     if (index) *index = -1;
     return nil;
   }
 
   NSMutableArray *newArray = [NSMutableArray arrayWithArray:history];
   NSMutableDictionary *newInnerDic = [NSMutableDictionary dictionaryWithDictionary:matchObject];
-  [newInnerDic setObject:path forKey:@"temppath"];
-  [newInnerDic setObject:[self aliasDataFromPath:path] forKey:@"alias"];
-  [newArray removeObjectAtIndex:matchIndex];
-  [newArray insertObject:newInnerDic atIndex:matchIndex];
+  COSetHistoryIdentity(newInnerDic, path, [self aliasDataFromPath:path]);
+  if (!multipleMatches) {
+    [newArray removeObjectAtIndex:matchIndex];
+    [newArray insertObject:newInnerDic atIndex:matchIndex];
+  } else {
+    NSArray *sortedMatches = [signatureMatches sortedArrayUsingSelector:@selector(compare:)];
+    NSEnumerator *reverseEnu = [sortedMatches reverseObjectEnumerator];
+    NSNumber *tempIndex;
+    while (tempIndex = [reverseEnu nextObject]) {
+      [newArray removeObjectAtIndex:[tempIndex intValue]];
+    }
+    if ([historyKey isEqualToString:@"LastPages"]) {
+      matchIndex = (int)[newArray count];
+      [newArray addObject:newInnerDic];
+    } else {
+      matchIndex = 0;
+      [newArray insertObject:newInnerDic atIndex:0];
+    }
+  }
   [defaults setObject:newArray forKey:historyKey];
   if (index) {
     *index = matchIndex;
@@ -3386,11 +3627,11 @@ static NSString *PathToNFC(NSString *path)
 		NSMutableDictionary *newDic = [NSMutableDictionary dictionaryWithDictionary:[defaults dictionaryForKey:@"BookSettings"]];
 		NSEnumerator *enuS = [newDic keyEnumerator];
 		id tempKey;
-		while (tempKey = [enuS nextObject]) {
-			if ([[self pathFromAliasData:[[newDic objectForKey:tempKey] objectForKey:@"alias"]] isEqualToString:path]) {
-				NSMutableDictionary *newInnerDic = [NSMutableDictionary dictionaryWithDictionary:[newDic objectForKey:tempKey]];
-				[newInnerDic setObject:path forKey:@"temppath"];
-				[newDic setObject:newInnerDic forKey:tempKey];
+			while (tempKey = [enuS nextObject]) {
+				if ([[self pathFromAliasData:[[newDic objectForKey:tempKey] objectForKey:@"alias"]] isEqualToString:path]) {
+					NSMutableDictionary *newInnerDic = [NSMutableDictionary dictionaryWithDictionary:[newDic objectForKey:tempKey]];
+          COSetHistoryIdentity(newInnerDic, path, [newInnerDic objectForKey:@"alias"]);
+					[newDic setObject:newInnerDic forKey:tempKey];
 				
 				if (key) {
 					*key = tempKey;
@@ -3428,12 +3669,11 @@ static NSString *PathToNFC(NSString *path)
 				NSMutableDictionary *newInnerDic = [NSMutableDictionary dictionaryWithDictionary:object];
 				int tempIndex = (int)[[defaults arrayForKey:@"RecentItems"] indexOfObject:object];
 				[newArray removeObjectAtIndex:tempIndex];
-				[newInnerDic setObject:path forKey:@"temppath"];
+        COSetHistoryIdentity(newInnerDic, path, [object objectForKey:@"alias"]);
 				[newArray insertObject:newInnerDic atIndex:tempIndex];
 				
 				if (index) {
 					*index = tempIndex;
-					
 				}
 				[defaults setObject:newArray forKey:@"RecentItems"];
 				return [NSDictionary dictionaryWithDictionary:newInnerDic];
@@ -3473,7 +3713,7 @@ static NSString *PathToNFC(NSString *path)
 				NSMutableDictionary *newInnerDic = [NSMutableDictionary dictionaryWithDictionary:object];
 				int tempIndex = (int)[[defaults arrayForKey:@"LastPages"] indexOfObject:object];
 				[newArray removeObjectAtIndex:tempIndex];
-				[newInnerDic setObject:path forKey:@"temppath"];
+        COSetHistoryIdentity(newInnerDic, path, [object objectForKey:@"alias"]);
 				[newArray insertObject:newInnerDic atIndex:tempIndex];
 				
 				if (index) {
@@ -3499,67 +3739,76 @@ static NSString *PathToNFC(NSString *path)
 	if (searched) {
 		return searched;
 	} else if (!searched && b && [defaults dictionaryForKey:@"BookSettings"]) {
-		NSString *temp;
-		
-		NSMutableDictionary *newDic = [NSMutableDictionary dictionaryWithDictionary:[defaults dictionaryForKey:@"BookSettings"]];
-		NSEnumerator *enuS = [newDic keyEnumerator];
-		id tempKey;
-		
-		while (tempKey = [enuS nextObject]) {
-			temp = [self pathFromAliasData:[[newDic objectForKey:tempKey] objectForKey:@"alias"]];
-			if ([[temp lastPathComponent] isEqualToString:[path lastPathComponent]] && ![[NSFileManager defaultManager] fileExistsAtPath:temp]) {
-				
-        BOOL shouldUseSetting = [defaults boolForKey:COAutoAcceptMissingSettingKey];
-        if (!shouldUseSetting) {
-          int result = (int)NSRunAlertPanel(NSLocalizedString(@"Setting is not found",@""),
-                                             NSLocalizedString(@"Setting of %@ is not found.\nDo you want to use a setting of %@ ?",@""),
-                                             NSLocalizedString(@"OK",@""), 
-                                             NSLocalizedString(@"Cancel",@""), 
-                                             nil,
-                                             path,temp);
-          shouldUseSetting = (result == NSAlertDefaultReturn || result == NSAlertFirstButtonReturn);
-        }
-				
-        if(shouldUseSetting) {
-					/*LastPagesの修正*/
-					int lastPagesIndex;
-					id lastPage = [self searchFromLastPages:temp index:&lastPagesIndex];
-					if (lastPage) { 
-						NSMutableDictionary *newLastPage = [NSMutableDictionary dictionaryWithDictionary:lastPage];
-						NSMutableArray *newLastPagesArray = [NSMutableArray arrayWithArray:[defaults arrayForKey:@"LastPages"]];
-						[newLastPage setObject:path forKey:@"temppath"];
-						[newLastPage setObject:[self aliasDataFromPath:path] forKey:@"alias"];
-						[newLastPagesArray removeObjectAtIndex:lastPagesIndex];
-						[newLastPagesArray insertObject:newLastPage atIndex:lastPagesIndex];
-						[defaults setObject:newLastPagesArray forKey:@"LastPages"];
-					}
-					/*RecentItemsの修正*/
-					int recentItemsIndex;
-					id recentItem = [self searchFromRecentItems:temp index:&recentItemsIndex];
-					if (recentItem) { 
-						NSMutableDictionary *newRecentItem = [NSMutableDictionary dictionaryWithDictionary:recentItem];
-						NSMutableArray *newRecentItemsArray = [NSMutableArray arrayWithArray:[defaults arrayForKey:@"RecentItems"]];
-						[newRecentItem setObject:path forKey:@"temppath"];
-						[newRecentItem setObject:[self aliasDataFromPath:path] forKey:@"alias"];
-						[newRecentItemsArray removeObjectAtIndex:recentItemsIndex];
-						[newRecentItemsArray insertObject:newRecentItem atIndex:recentItemsIndex];
-						[defaults setObject:newRecentItemsArray forKey:@"RecentItems"];
-					}					
-					/*BookSettingsの修正*/
-					NSMutableDictionary *newInnerDic = [NSMutableDictionary dictionaryWithDictionary:[newDic objectForKey:tempKey]];
-					[newInnerDic setObject:path forKey:@"temppath"];
-					[newInnerDic setObject:[self aliasDataFromPath:path] forKey:@"alias"];
-					[newDic setObject:newInnerDic forKey:tempKey];
-					
-					if (key) {
-						*key = tempKey;
-					}
-					[defaults setObject:newDic forKey:@"BookSettings"];
-					return [NSDictionary dictionaryWithDictionary:newInnerDic];
-				}
-			}
-		}
-	}
+    NSString *pathSignature = COHistorySignatureForPath(path, COHistorySignatureSampleBytes);
+    if (!pathSignature) {
+      return nil;
+    }
+
+		NSDictionary *bookSettings = [defaults dictionaryForKey:@"BookSettings"];
+		NSMutableDictionary *newDic = [NSMutableDictionary dictionaryWithDictionary:bookSettings];
+    NSDictionary *signatureIndex = COHistorySignatureIndexForDictionary(@"BookSettings", bookSettings);
+    NSArray *matchedKeys = [signatureIndex objectForKey:pathSignature];
+    if (!matchedKeys || [matchedKeys count] != 1) {
+      return nil;
+    }
+    id matchedKey = [matchedKeys objectAtIndex:0];
+    NSDictionary *matchedCandidate = [newDic objectForKey:matchedKey];
+    NSString *matchedTemp = nil;
+    if (!matchedCandidate) {
+      return nil;
+    }
+    matchedTemp = [self pathFromAliasData:[matchedCandidate objectForKey:@"alias"]];
+
+    BOOL shouldUseSetting = [defaults boolForKey:COAutoAcceptMissingSettingKey];
+    if (!shouldUseSetting) {
+      NSString *tempForAlert = matchedTemp;
+      if (!tempForAlert) {
+        tempForAlert = NSLocalizedString(@"(Unknown file)", @"");
+      }
+      int result = (int)NSRunAlertPanel(NSLocalizedString(@"Setting is not found",@""),
+                                         NSLocalizedString(@"Setting of %@ is not found.\nDo you want to use a setting of %@ ?",@""),
+                                         NSLocalizedString(@"OK",@""),
+                                         NSLocalizedString(@"Cancel",@""),
+                                         nil,
+                                         path,tempForAlert);
+      shouldUseSetting = (result == NSAlertDefaultReturn || result == NSAlertFirstButtonReturn);
+    }
+    if (shouldUseSetting) {
+      NSData *newAliasData = [self aliasDataFromPath:path];
+      /*LastPagesの修正*/
+      int lastPagesIndex;
+      id lastPage = [self searchFromLastPages:matchedTemp index:&lastPagesIndex];
+      if (lastPage) {
+        NSMutableDictionary *newLastPage = [NSMutableDictionary dictionaryWithDictionary:lastPage];
+        NSMutableArray *newLastPagesArray = [NSMutableArray arrayWithArray:[defaults arrayForKey:@"LastPages"]];
+        COSetHistoryIdentity(newLastPage, path, newAliasData);
+        [newLastPagesArray removeObjectAtIndex:lastPagesIndex];
+        [newLastPagesArray insertObject:newLastPage atIndex:lastPagesIndex];
+        [defaults setObject:newLastPagesArray forKey:@"LastPages"];
+      }
+      /*RecentItemsの修正*/
+      int recentItemsIndex;
+      id recentItem = [self searchFromRecentItems:matchedTemp index:&recentItemsIndex];
+      if (recentItem) {
+        NSMutableDictionary *newRecentItem = [NSMutableDictionary dictionaryWithDictionary:recentItem];
+        NSMutableArray *newRecentItemsArray = [NSMutableArray arrayWithArray:[defaults arrayForKey:@"RecentItems"]];
+        COSetHistoryIdentity(newRecentItem, path, newAliasData);
+        [newRecentItemsArray removeObjectAtIndex:recentItemsIndex];
+        [newRecentItemsArray insertObject:newRecentItem atIndex:recentItemsIndex];
+        [defaults setObject:newRecentItemsArray forKey:@"RecentItems"];
+      }
+      /*BookSettingsの修正*/
+      NSMutableDictionary *newInnerDic = [NSMutableDictionary dictionaryWithDictionary:[newDic objectForKey:matchedKey]];
+      COSetHistoryIdentity(newInnerDic, path, newAliasData);
+      [newDic setObject:newInnerDic forKey:matchedKey];
+
+      if (key) {
+        *key = matchedKey;
+      }
+      [defaults setObject:newDic forKey:@"BookSettings"];
+      return [NSDictionary dictionaryWithDictionary:newInnerDic];
+    }
+  }
 	return nil;
 }
 @end
