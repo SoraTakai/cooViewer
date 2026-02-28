@@ -1,6 +1,6 @@
 [submodule "XADMaster"]
-	path = XADMaster
+	path = vendor/XADMaster
 	url = https://github.com/tak758/XADMaster.git
 [submodule "UniversalDetector"]
-	path = UniversalDetector
+	path = vendor/UniversalDetector
 	url = https://github.com/tak758/universal-detector.git
