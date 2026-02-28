@@ -9,6 +9,10 @@
 	
 	[self setLevel:NSNormalWindowLevel];
 	[self setAcceptsMouseMovedEvents:YES];
+  [self setStyleMask:(NSWindowStyleMaskBorderless | NSWindowStyleMaskResizable)];
+  if ([self respondsToSelector:@selector(setAccessibilitySubrole:)]) {
+    [self setAccessibilitySubrole:NSAccessibilityStandardWindowSubrole];
+  }
 	fullscreen = [defaults boolForKey:@"Fullscreen"];
 	if ([defaults boolForKey:@"DontHideMenuBar"]) {
 		hideMenuBar = NO;
@@ -36,6 +40,16 @@
 - (NSString *)accessibilitySubrole
 {
   return NSAccessibilityStandardWindowSubrole;
+}
+
+- (BOOL)canBecomeKeyWindow
+{
+  return YES;
+}
+
+- (BOOL)canBecomeMainWindow
+{
+  return YES;
 }
 
 - (void)setFullScreen:(BOOL)b
