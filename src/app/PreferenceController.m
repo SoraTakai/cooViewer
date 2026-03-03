@@ -1034,12 +1034,6 @@ static const int DIALOG_CANCEL	= 129;
 	} else {
 		[showThumbnailCheck setState:NSOffState];
 	}
-  id autoAcceptMissingSetting = [defaults objectForKey:COAutoAcceptMissingSettingKey];
-  if (!autoAcceptMissingSetting || [autoAcceptMissingSetting boolValue]) {
-    [autoAcceptMissingSettingCheck setState:NSOnState];
-  } else {
-    [autoAcceptMissingSettingCheck setState:NSOffState];
-  }
 	if ([defaults boolForKey:@"IgnoreImageDpi"]) {
 		[ignoreDpiCheck setState:NSControlStateValueOn];
 	} else {
@@ -1565,11 +1559,6 @@ static const int DIALOG_CANCEL	= 129;
 		} else {
 			[defaults setBool:NO forKey:@"ShowThumbnailWhenOpen"];
 		}
-    if ([autoAcceptMissingSettingCheck state]==NSOnState) {
-      [defaults setBool:YES forKey:COAutoAcceptMissingSettingKey];
-    } else {
-      [defaults setBool:NO forKey:COAutoAcceptMissingSettingKey];
-    }
 		if ([ignoreDpiCheck state]==NSControlStateValueOn) {
 			[defaults setBool:YES forKey:@"IgnoreImageDpi"];
 		} else {
@@ -1860,29 +1849,19 @@ static const int DIALOG_CANCEL	= 129;
 									   didEndSelector:@selector(disposeSettingSheetDidEnd:returnCode:contextInfo:) 
 										  contextInfo:nil];
 		
-		NSDictionary *currentBookSettingDic;
-		if ([defaults dictionaryForKey:@"BookSettings"]) {
-			currentBookSettingDic = [defaults dictionaryForKey:@"BookSettings"];
+		NSDictionary *currentHistoryDic;
+		if ([defaults dictionaryForKey:@"HistoryByHash"]) {
+			currentHistoryDic = [defaults dictionaryForKey:@"HistoryByHash"];
 		} else {
-			currentBookSettingDic = [NSDictionary dictionary];
+			currentHistoryDic = [NSDictionary dictionary];
 		}
-		NSEnumerator *currnetBookSettingEnu = [currentBookSettingDic keyEnumerator];
-		NSMutableDictionary *newtBookSettingDic = [NSMutableDictionary dictionary];
+		NSEnumerator *currentHistoryEnu = [currentHistoryDic keyEnumerator];
+		NSMutableDictionary *newHistoryDic = [NSMutableDictionary dictionary];
 		
-		
-		NSArray *currentLastPageArray;
-		if ([defaults arrayForKey:@"LastPages"]) {
-			currentLastPageArray = [defaults arrayForKey:@"LastPages"];
-		} else {
-			currentLastPageArray = [NSArray array];
-		}
-		NSEnumerator *currentLastPageEnu = [currentLastPageArray objectEnumerator];
-		NSMutableArray *newtLastPageArray = [NSMutableArray array];
-		
-		[disposeSettingProgress setMaxValue: (double)([currentBookSettingDic count]+[currentLastPageArray count]+1)];
+		[disposeSettingProgress setMaxValue: (double)([currentHistoryDic count]+1)];
 		[disposeSettingProgress setDoubleValue: (double)0];
 		[disposeSettingProgress displayIfNeeded];
-		[self performSelectorOnMainThread:@selector(disposeSettingMethod:) withObject:[NSArray arrayWithObjects:currentBookSettingDic,currnetBookSettingEnu,newtBookSettingDic,currentLastPageArray,currentLastPageEnu,newtLastPageArray,[NSNumber numberWithInt:0],nil] waitUntilDone:NO];
+		[self performSelectorOnMainThread:@selector(disposeSettingMethod:) withObject:[NSArray arrayWithObjects:currentHistoryDic,currentHistoryEnu,newHistoryDic,[NSNumber numberWithInt:0],nil] waitUntilDone:NO];
     }
 }
 
@@ -1890,43 +1869,43 @@ static const int DIALOG_CANCEL	= 129;
 {
 	NSString *temp;
 	
-	NSDictionary *currentBookSettingDic = [array objectAtIndex:0];
-	NSEnumerator *currnetBookSettingEnu = [array objectAtIndex:1];
-	NSMutableDictionary *newtBookSettingDic = [array objectAtIndex:2];
-	NSArray *currentLastPageArray = [array objectAtIndex:3];
-	NSEnumerator *currentLastPageEnu = [array objectAtIndex:4];
-	NSMutableArray *newtLastPageArray = [array objectAtIndex:5];
-	int i = [[array objectAtIndex:6] intValue];
+	NSDictionary *currentHistoryDic = [array objectAtIndex:0];
+	NSEnumerator *currentHistoryEnu = [array objectAtIndex:1];
+	NSMutableDictionary *newHistoryDic = [array objectAtIndex:2];
+	int i = [[array objectAtIndex:3] intValue];
 	
-	if (i<[currentBookSettingDic count]) {
-		id tempKey;
-		
-		if (tempKey = [currnetBookSettingEnu nextObject]) {
-			temp = [controller pathFromAliasData:[[currentBookSettingDic objectForKey:tempKey] objectForKey:@"alias"]];
-			if ([[NSFileManager defaultManager] fileExistsAtPath:temp]) {
-				[newtBookSettingDic setObject:[currentBookSettingDic objectForKey:tempKey] forKey:tempKey];
+	if (i<[currentHistoryDic count]) {
+		id tempKey = [currentHistoryEnu nextObject];
+		if (tempKey) {
+			NSDictionary *entry = [currentHistoryDic objectForKey:tempKey];
+			temp = [controller pathFromAliasData:[entry objectForKey:@"alias"]];
+			if (!temp || [temp isEqualToString:@"file not found"]) {
+				temp = [entry objectForKey:@"temppath"];
+			}
+			if (temp && [[NSFileManager defaultManager] fileExistsAtPath:temp]) {
+				[newHistoryDic setObject:entry forKey:tempKey];
 			}
 		}
-	} else {
-		id object;
-		if (object = [currentLastPageEnu nextObject]) {
-			temp = [controller pathFromAliasData:[object objectForKey:@"alias"]];
-			if ([[NSFileManager defaultManager] fileExistsAtPath:temp]) {
-				[newtLastPageArray addObject:object];
-			}
-		}
-		
 	}
 	
 	i++;
 	[disposeSettingProgress setDoubleValue: (double)i];
 	[disposeSettingProgress displayIfNeeded];
 	if ([disposeSettingPanel isVisible]) {
-		if (i<([currentBookSettingDic count]+[currentLastPageArray count])) {
-			[self performSelectorOnMainThread:@selector(disposeSettingMethod:) withObject:[NSArray arrayWithObjects:currentBookSettingDic,currnetBookSettingEnu,newtBookSettingDic,currentLastPageArray,currentLastPageEnu,newtLastPageArray,[NSNumber numberWithInt:i],nil] waitUntilDone:NO];
+		if (i<[currentHistoryDic count]) {
+			[self performSelectorOnMainThread:@selector(disposeSettingMethod:) withObject:[NSArray arrayWithObjects:currentHistoryDic,currentHistoryEnu,newHistoryDic,[NSNumber numberWithInt:i],nil] waitUntilDone:NO];
 		} else {
-			[defaults setObject:newtBookSettingDic forKey:@"BookSettings"];
-			[defaults setObject:newtLastPageArray forKey:@"LastPages"];
+			[defaults setObject:newHistoryDic forKey:@"HistoryByHash"];
+			NSArray *recentHashes = [defaults arrayForKey:@"RecentItems"];
+			NSMutableArray *newRecentHashes = [NSMutableArray array];
+			NSEnumerator *recentEnu = [recentHashes objectEnumerator];
+			id tempHash;
+			while (tempHash = [recentEnu nextObject]) {
+				if ([newHistoryDic objectForKey:tempHash]) {
+					[newRecentHashes addObject:tempHash];
+				}
+			}
+			[defaults setObject:newRecentHashes forKey:@"RecentItems"];
 			[defaults synchronize];
 			[[NSApplication sharedApplication] endSheet:disposeSettingPanel returnCode:DIALOG_OK];
 		}

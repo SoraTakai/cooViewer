@@ -28,7 +28,6 @@
 	
 	IBOutlet id dontHideMenubarCheck;
 	IBOutlet id showThumbnailCheck;
-  IBOutlet id autoAcceptMissingSettingCheck;
 	
 	IBOutlet id imageCacheTextField;
 	IBOutlet id screenCacheTextField;

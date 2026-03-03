@@ -643,14 +643,6 @@
                                                 <font key="font" metaFont="system"/>
                                             </buttonCell>
                                         </button>
-                                        <button fixedFrame="YES" translatesAutoresizingMaskIntoConstraints="NO" id="YSM-R3-HtP">
-                                            <rect key="frame" x="18" y="51" width="336" height="18"/>
-                                            <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMinY="YES"/>
-                                            <buttonCell key="cell" type="check" title="Auto-apply the same setting for moved files" bezelStyle="regularSquare" imagePosition="left" alignment="left" inset="2" id="Nhz-fj-sPY">
-                                                <behavior key="behavior" changeContents="YES" doesNotDimImage="YES" lightByContents="YES"/>
-                                                <font key="font" metaFont="system"/>
-                                            </buttonCell>
-                                        </button>
                                         <button fixedFrame="YES" translatesAutoresizingMaskIntoConstraints="NO" id="1407">
                                             <rect key="frame" x="18" y="95" width="298" height="18"/>
                                             <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMinY="YES"/>
@@ -2926,7 +2918,6 @@ Gw
                 <outlet property="accessorySettingPanel" destination="2863" id="2865"/>
                 <outlet property="accessorySettingView" destination="2866" id="2867"/>
                 <outlet property="alwaysRememberLastCheck" destination="2013" id="2042"/>
-                <outlet property="autoAcceptMissingSettingCheck" destination="YSM-R3-HtP" id="q6D-fn-DLx"/>
                 <outlet property="bufferingModePopUpButton" destination="1610" id="1687"/>
                 <outlet property="canScrollActionPopUpButton" destination="1862" id="1877"/>
                 <outlet property="changeCurrentFolderPopUpButton" destination="4256" id="4263"/>
